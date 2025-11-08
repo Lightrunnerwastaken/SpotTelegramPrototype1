@@ -1,0 +1,20 @@
+# Telegram
+BOT_TOKEN=
+# Kommagetrennte Liste von Telegram User-IDs (nicht Chat-/Gruppen-IDs)
+ALLOWED_CHAT_IDS=12345678,23456789
+
+# ElevenLabs TTS
+ELEVEN_API_KEY=
+ELEVEN_VOICE_ID=
+# Optional (Default im Code: eleven_multilingual_v2)
+ELEVEN_MODEL_ID=eleven_multilingual_v2
+
+# STT (Speech-to-Text) – Vosk
+# Aktuell implementiertes Backend: vosk
+STT_BACKEND=vosk
+# Pfad zum entpackten Vosk-Modell
+# Beispiel (Windows): C:\\path\\to\\vosk-model-small-de-0.15
+VOSK_MODEL_PATH=
+# Optional: bevorzugte Sprache (z. B. "de")
+STT_LANGUAGE=de
+

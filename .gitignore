@@ -1,0 +1,27 @@
+# Virtuelle Umgebung
+.venv/
+venv/
+
+# Bytecode-Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs & temporäre Daten
+*.log
+*.tmp
+
+# Environment & Keys
+.env
+.env.*
+
+# Media & Audio
+media/
+tts_cache/
+uploads/
+
+# Editor & System
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,6 @@
+python-telegram-bot==21.*
+python-dotenv
+requests
+opencv-python
+simpleaudio
+vosk
