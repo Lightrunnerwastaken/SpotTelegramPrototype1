@@ -25,3 +25,16 @@ uploads/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Additional secrets/sensitive files
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+id_*
+*.sqlite
+*.db
+*.pkl
