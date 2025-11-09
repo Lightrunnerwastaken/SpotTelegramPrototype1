@@ -4,3 +4,6 @@ requests
 opencv-python
 simpleaudio
 vosk
+bosdyn-client
+bosdyn-mission
+bosdyn-api

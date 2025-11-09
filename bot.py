@@ -32,6 +32,10 @@ try:  # relative imports when executed as package
     )
     from .tts import eleven_tts_to_file
     from .stt import speech_to_text
+    try:
+        from .spot_control import SpotController  # type: ignore
+    except Exception:
+        SpotController = None  # type: ignore
 except Exception:  # fallback for direct execution
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -39,6 +43,10 @@ except Exception:  # fallback for direct execution
     from media import AudioManager, capture_frame_bgr, encode_jpeg, ensure_wav  # type: ignore
     from tts import eleven_tts_to_file  # type: ignore
     from stt import speech_to_text  # type: ignore
+    try:
+        from spot_control import SpotController  # type: ignore
+    except Exception:
+        SpotController = None  # type: ignore
 
 # -----------------------------------------------------------------------------
 # 1) Configuration & Logging
@@ -300,6 +308,21 @@ async def gipfeli(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
     await _start_for(context, chat_id, user_id, start_room, target)
+
+    # Optional: Spot SDK Aktion (Demo)
+    spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+    if spot and SpotController:
+        async def _spot_task():
+            try:
+                waypoint = os.getenv("SPOT_WAYPOINT_MENSA", "") if "mensa" in target.lower() else ""
+                if waypoint:
+                    msg = await asyncio.to_thread(spot.navigate_to_waypoint, waypoint)
+                else:
+                    msg = await asyncio.to_thread(spot.power_on_and_stand)
+                await update.message.reply_text(str(msg))
+            except Exception as e:
+                await update.message.reply_text(f"Spot-Aktion fehlgeschlagen: {e}")
+        context.application.create_task(_spot_task())
 
 async def gipfeli_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await reject_if_unauthorized(update):
@@ -572,6 +595,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # -----------------------------------------------------------------------------
+# 6) Spot status (optional)
+# -----------------------------------------------------------------------------
+
+async def spot_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await reject_if_unauthorized(update):
+        return
+    spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+    if not spot:
+        await update.message.reply_text("Spot ist nicht konfiguriert. Setze SPOT_HOST/USERNAME/PASSWORD in .env.")
+        return
+    try:
+        txt = await asyncio.to_thread(spot.get_status_summary)
+    except Exception as e:
+        txt = f"nicht verfügbar ({e})"
+    await update.message.reply_text(f"🤖 {txt}")
+
+# -----------------------------------------------------------------------------
 # 7) App bootstrap
 # -----------------------------------------------------------------------------
 
@@ -584,6 +624,15 @@ def main() -> None:
 
     # Globalen AudioManager bereitstellen
     app.bot_data["audio_manager"] = AudioManager(app)
+    # Optional: SpotController (aus .env)
+    try:
+        from .spot_control import SpotController as _SC  # type: ignore
+    except Exception:
+        try:
+            from spot_control import SpotController as _SC  # type: ignore
+        except Exception:
+            _SC = None  # type: ignore
+    app.bot_data["spot"] = (_SC.from_env() if _SC else None)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
@@ -594,6 +643,7 @@ def main() -> None:
     app.add_handler(CommandHandler("gipfeli", gipfeli))
     app.add_handler(CommandHandler("gipfeli_status", gipfeli_status))
     app.add_handler(CommandHandler("status", status_alias))
+    app.add_handler(CommandHandler("spot_status", spot_status))
     app.add_handler(CommandHandler("abort", abort))
     app.add_handler(CommandHandler("speech", speech))
     app.add_handler(CallbackQueryHandler(on_button))

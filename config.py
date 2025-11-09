@@ -21,3 +21,12 @@ def get_eleven_config() -> Tuple[str, str, str]:
     model_id = (os.getenv("ELEVEN_MODEL_ID") or "eleven_multilingual_v2").strip()
     return api_key, voice_id, model_id
 
+
+def get_spot_config() -> Tuple[str, str, str]:
+    """Return Spot SDK connection parameters (host, username, password).
+    Empty strings indicate not configured.
+    """
+    host = (os.getenv("SPOT_HOST") or "").strip()
+    user = (os.getenv("SPOT_USERNAME") or "").strip()
+    pwd = (os.getenv("SPOT_PASSWORD") or "").strip()
+    return host, user, pwd
