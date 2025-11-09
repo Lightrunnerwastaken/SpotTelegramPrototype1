@@ -818,6 +818,62 @@ async def on_audio_spot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await status.edit_text("❌ Konnte Audiodatei nicht verarbeiten. Prüfe STT/ffmpeg/Modelle.")
 
 # -----------------------------------------------------------------------------
+# 6c) Overrides: user-facing texts and keyboards (UTF-8 + Spot-aware help)
+# -----------------------------------------------------------------------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # type: ignore[override]
+    if await reject_if_unauthorized(update):
+        return
+    await update.message.reply_text("👋 Hallo! Ich bin euer Spot‑Bot.\nTippe /help für eine Übersicht der Befehle.")
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # type: ignore[override]
+    if await reject_if_unauthorized(update):
+        return
+    help_text = (
+        "<b>Spot‑Bot Befehle</b>\n"
+        "• <code>/start</code> – Begrüßung\n"
+        "• <code>/help</code> – diese Hilfe\n"
+        "• <code>/whoami</code> – zeigt deine Telegram‑User‑ID\n"
+        "• <code>/say &lt;text&gt;</code> – Echo\n"
+        "• <code>/photo</code> – Foto (Spot‑Kamera, Fallback lokale Webcam)\n"
+        "• <code>/play &lt;datei&gt;</code> – Audio auf Spot abspielen (Fallback lokal)\n"
+        "• <code>/speech &lt;text&gt;</code> – ElevenLabs TTS → Audio im Chat und auf Spot (Fallback lokal)\n"
+        "• <code>/gipfeli [Start] [Ziel]</code> – Mission starten (Queue & Fortschritt; optional Spot‑Aktion)\n"
+        "• <code>/gipfeli_status</code> – aktiver Auftrag + Warteschlange (+ Spot‑Status)\n"
+        "• <code>/status</code> – Alias für /gipfeli_status\n"
+        "• <code>/spot_status</code> – kompakter Spot‑Status\n"
+        "• <code>/abort</code> – bricht deine laufende Mission ab\n\n"
+        "<i>Hinweis:</i> Ohne Spot‑Konfiguration nutzt der Bot automatisch lokale Kamera/Audio.\n"
+        "Für produktiven Einsatz: ALLOWED_CHAT_IDS in .env setzen."
+    )
+    await update.message.reply_text(help_text, parse_mode="HTML", reply_markup=build_help_keyboard())
+
+
+def build_help_keyboard() -> InlineKeyboardMarkup:  # type: ignore[override]
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🆔 Whoami", callback_data="whoami"),
+            InlineKeyboardButton("📊 Status", callback_data="status"),
+        ]
+    ])
+
+
+def build_mission_keyboard() -> InlineKeyboardMarkup:  # type: ignore[override]
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📷 Foto", callback_data="photo"),
+            InlineKeyboardButton("📊 Status", callback_data="status"),
+            InlineKeyboardButton("🛑 Abbrechen", callback_data="abort"),
+        ]
+    ])
+
+
+async def status_alias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # type: ignore[override]
+    # Nur Weiterleitung auf gipfeli_status (inkl. integriertem Spot‑Status)
+    await gipfeli_status(update, context)
+
+# -----------------------------------------------------------------------------
 # 7) App bootstrap
 # -----------------------------------------------------------------------------
 
