@@ -1,0 +1,42 @@
+### REST API Examples for spot_v0_bot
+### Use with VS Code "REST Client" extension or copy curl commands
+
+@host = 127.0.0.1
+@port = 8000
+@base = http://{{host}}:{{port}}
+@token = REPLACE_WITH_API_TOKEN
+
+### Health (requires token only if API_TOKEN is set)
+GET {{base}}/health
+Authorization: Bearer {{token}}
+
+### Spot status
+GET {{base}}/spot/status
+Authorization: Bearer {{token}}
+
+### Spot photo (JPEG). Change source as needed, e.g. hand_color_image
+GET {{base}}/spot/photo?source=frontleft_fisheye_image
+Authorization: Bearer {{token}}
+
+### Power on + stand
+POST {{base}}/spot/power_on_and_stand
+Authorization: Bearer {{token}}
+
+### Navigate to waypoint (GraphNav must be loaded/localized)
+POST {{base}}/spot/navigate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "waypoint_id": "YOUR_WAYPOINT_ID"
+}
+
+### Say text on Spot (TTS -> play on robot)
+POST {{base}}/spot/say
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "text": "Hallo Spot!"
+}
+

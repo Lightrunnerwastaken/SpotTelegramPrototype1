@@ -68,6 +68,35 @@ Spot‑Integration (optional)
   - `/gipfeli` startet optional eine Demo‑Aktion:
     - Wenn `SPOT_WAYPOINT_MENSA` gesetzt und das Ziel „Mensa“ enthält → GraphNav `navigate_to`.
     - Sonst: `power_on + stand`.
+
+HTTP REST‑API (optional)
+- Zweck: Einfache Anbindung externer Tools/Services (z. B. Web‑UI, Scheduler) ohne Telegram.
+- Starten:
+  - `python -m spot_v0_bot.api`
+  - Steuerung via Env: `API_HOST` (Default `127.0.0.1`), `API_PORT` (Default `8000`)
+  - Sicherheit: Optionales `API_TOKEN` aktivieren. Dann ist ein Header `Authorization: Bearer <token>` oder Query `?api_token=<token>` erforderlich (sonst `401`).
+  - Root‑Route `/` liefert eine JSON‑Übersicht (erfordert kein Token) mit Auth‑Hinweisen und den verfügbaren Endpunkten.
+- Endpunkte (JSON, sofern nicht anders genannt):
+  - `GET /health` → `{ ok: true }`
+  - `GET /spot/status` → `{ summary: "…" }`
+  - `GET /spot/photo?source=frontleft_fisheye_image` → JPEG‑Bild (Default‑Quelle per `SPOT_IMAGE_SOURCE`)
+  - `POST /spot/power_on_and_stand` → `{ message: "…" }`
+  - `POST /spot/navigate` mit Body `{ "waypoint_id": "…" }` → `{ message: "…" }`
+  - `POST /spot/say` mit Body `{ "text": "Hallo" }` → erzeugt TTS und spielt auf Spot ab → `{ message: "…" }`
+- Beispiele (mit Token):
+  - Status: `curl -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/spot/status`
+  - Foto: `curl -H "Authorization: Bearer $API_TOKEN" -L "http://127.0.0.1:8000/spot/photo?source=frontleft_fisheye_image" -o spot.jpg`
+  - Power‑On/Stand: `curl -X POST -H "Authorization: Bearer $API_TOKEN" http://127.0.0.1:8000/spot/power_on_and_stand`
+  - Navigate: `curl -X POST -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" -d '{"waypoint_id":"wp_123"}' http://127.0.0.1:8000/spot/navigate`
+  - Say (TTS→Spot): `curl -X POST -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" -d '{"text":"Hallo Spot"}' http://127.0.0.1:8000/spot/say`
+- Hinweise & Sicherheit:
+  - Standard‑Bind ist `127.0.0.1`; für Remote‑Zugriff `API_HOST=0.0.0.0` setzen und zwingend `API_TOKEN` + Firewall/Reverse‑Proxy verwenden.
+  - `SPOT_*` müssen konfiguriert sein, sonst liefern Spot‑Endpunkte `400`.
+  - `/spot/say` benötigt ElevenLabs‑Konfiguration.
+  - Fehlerfälle: `401` bei fehlendem/ungültigem Token, `400` bei fehlenden Parametern, `5xx` bei internen Fehlern.
+
+Beispiele
+- Siehe `spot_v0_bot/rest_api_examples.http` für direkt ausführbare Requests (REST Client) oder als Vorlage für curl.
 - Hinweise:
   - Für GraphNav muss eine Karte geladen und der Roboter lokalisiert sein; Waypoint‑IDs müssen bekannt sein.
   - Das offizielle Spot SDK ist gRPC‑basiert. Für reine HTTP/GET‑Flows empfiehlt sich eine kleine Bridge (REST‑Service), die intern `spot_control.py` nutzt.

@@ -821,6 +821,31 @@ async def on_audio_spot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # 7) App bootstrap
 # -----------------------------------------------------------------------------
 
+async def gipfeli_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # type: ignore[no-redef]
+    if await reject_if_unauthorized(update):
+        return
+    chat_id = update.effective_chat.id
+    s = get_state(chat_id)
+    if not s.active and not s.queue:
+        await update.message.reply_text("ℹ️ Keine aktive Mission. Warteschlange ist leer.")
+        return
+    lines: list[str] = []
+    if s.active:
+        elapsed = int(time.time() - (s.started_at or time.time()))
+        remaining = max(0, s.eta_seconds - elapsed)
+        lines.append(f"🚶 Aktiv: {s.start_room} → {s.target}, Rest {seconds_to_mmss(remaining)}")
+    if s.queue:
+        q = ", ".join([f'<a href="tg://user?id={uid}">#{i+1}</a>' for i, uid in enumerate(s.queue)])
+        lines.append(f"👥 Queue: {q}")
+    spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+    if spot:
+        try:
+            spot_summary = await asyncio.to_thread(spot.get_status_summary)
+            lines.append(f"🤖 Spot: {spot_summary}")
+        except Exception as e:
+            lines.append(f"🤖 Spot: nicht verfügbar ({e})")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s:%(name)s: %(message)s")
     if not BOT_TOKEN:
