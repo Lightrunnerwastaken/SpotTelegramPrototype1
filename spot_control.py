@@ -13,6 +13,19 @@ try:
     from bosdyn.client.robot_command import RobotCommandClient, RobotCommandBuilder, blocking_stand
     from bosdyn.client.power import PowerClient
     from bosdyn.client.graph_nav import GraphNavClient
+    from bosdyn.client.image import ImageClient
+    try:
+        from bosdyn.client.audio import AudioClient as RobotAudioClient  # type: ignore
+    except Exception:
+        RobotAudioClient = None  # type: ignore
+    try:
+        from bosdyn.client.spot_cam.audio import AudioClient as SpotCamAudioClient  # type: ignore
+    except Exception:
+        SpotCamAudioClient = None  # type: ignore
+    try:
+        import grpc  # type: ignore
+    except Exception:
+        grpc = None  # type: ignore
     BOSDYN_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
     BOSDYN_AVAILABLE = False
@@ -45,6 +58,9 @@ class SpotController:
         self._command_client = None
         self._power_client = None
         self._graphnav_client = None
+        self._image_client = None
+        self._audio_client_spotcam = None
+        self._audio_client_robot = None
 
     @classmethod
     def from_env(cls) -> Optional["SpotController"]:
@@ -82,11 +98,35 @@ class SpotController:
             self._graphnav_client = robot.ensure_client(GraphNavClient.default_service_name)
         except Exception:
             self._graphnav_client = None
+        try:
+            self._image_client = robot.ensure_client(ImageClient.default_service_name)
+        except Exception:
+            self._image_client = None
+        # Prefer Spot CAM audio client if available; fallback to robot audio client
+        try:
+            if 'SpotCamAudioClient' in globals() and SpotCamAudioClient is not None:
+                self._audio_client_spotcam = robot.ensure_client(SpotCamAudioClient.default_service_name)  # type: ignore[attr-defined]
+        except Exception:
+            self._audio_client_spotcam = None
+        try:
+            if 'RobotAudioClient' in globals() and RobotAudioClient is not None:
+                self._audio_client_robot = robot.ensure_client(RobotAudioClient.default_service_name)  # type: ignore[attr-defined]
+        except Exception:
+            self._audio_client_robot = None
 
     # --- Status ---
     def get_status(self) -> SpotStatus:
         self._ensure_connected()
-        state = self._state_client.get_robot_state()
+        try:
+            state = self._state_client.get_robot_state()
+        except Exception as e:
+            # simple retry on auth/connectivity
+            if 'grpc' in globals() and grpc is not None and hasattr(e, 'code') and str(e.code()) in {"StatusCode.UNAUTHENTICATED", "StatusCode.UNAVAILABLE"}:  # type: ignore
+                self._robot.authenticate(self.username, self.password)  # type: ignore
+                self._robot.time_sync.wait_for_sync()  # type: ignore
+                state = self._state_client.get_robot_state()
+            else:
+                raise
 
         # Battery percent
         pct = None
@@ -127,12 +167,43 @@ class SpotController:
             logger.warning(f"Spot Status fehlgeschlagen: {e}")
             return f"Spot Status nicht verfügbar: {e}"
 
+    # --- Camera: capture JPEG from a source ---
+    def capture_image_jpeg(self, source: str = 'frontleft_fisheye_image') -> bytes:
+        self._ensure_connected()
+        if self._image_client is None:
+            raise RuntimeError("ImageClient nicht verfügbar. Prüfe Spot SDK/Services.")
+        try:
+            responses = self._image_client.get_image_from_sources([source])
+        except Exception as e:
+            if 'grpc' in globals() and grpc is not None and hasattr(e, 'code') and str(e.code()) in {"StatusCode.UNAUTHENTICATED", "StatusCode.UNAVAILABLE"}:  # type: ignore
+                self._robot.authenticate(self.username, self.password)  # type: ignore
+                self._robot.time_sync.wait_for_sync()  # type: ignore
+                responses = self._image_client.get_image_from_sources([source])
+            else:
+                raise
+        if not responses:
+            raise RuntimeError(f"Keine Bildantwort von Quelle: {source}")
+        resp = responses[0]
+        # Prefer compressed image data
+        try:
+            data = bytes(resp.shot.image.data)
+        except Exception:
+            data = getattr(resp, 'image', getattr(resp, 'data', b''))
+        if not data:
+            raise RuntimeError("Leeres Bild erhalten.")
+        return data
+
     # --- Simple action: power on and stand ---
     def power_on_and_stand(self, timeout_sec: float = 20.0) -> str:
         self._ensure_connected()
         lease_keepalive = LeaseKeepAlive(self._lease_client, must_acquire=True, return_at_exit=True)
         try:
-            self._power_client.power_on(timeout_sec=timeout_sec)
+            try:
+                self._power_client.power_on(timeout_sec=timeout_sec)
+            except Exception:
+                self._robot.authenticate(self.username, self.password)  # type: ignore
+                self._robot.time_sync.wait_for_sync()  # type: ignore
+                self._power_client.power_on(timeout_sec=timeout_sec)
             blocking_stand(self._command_client, timeout_sec=10)
             return "Spot: powered on and standing."
         finally:
@@ -145,8 +216,46 @@ class SpotController:
             raise RuntimeError("GraphNavClient nicht verfügbar. Ist GraphNav lizenziert/installiert?")
         lease_keepalive = LeaseKeepAlive(self._lease_client, must_acquire=True, return_at_exit=True)
         try:
-            resp = self._graphnav_client.navigate_to(destination_waypoint_id=waypoint_id, command_duration=cmd_duration_sec)
+            try:
+                resp = self._graphnav_client.navigate_to(destination_waypoint_id=waypoint_id, command_duration=cmd_duration_sec)
+            except Exception:
+                self._robot.authenticate(self.username, self.password)  # type: ignore
+                self._robot.time_sync.wait_for_sync()  # type: ignore
+                resp = self._graphnav_client.navigate_to(destination_waypoint_id=waypoint_id, command_duration=cmd_duration_sec)
             return f"GraphNav navigate_to gestartet: waypoint={waypoint_id}, resp.status={resp.status}"
         finally:
             lease_keepalive.__exit__(None, None, None)
 
+    # --- Audio: play a short WAV/MP3 on robot speakers (requires AudioClient) ---
+    def play_audio_file(self, path: str) -> str:
+        self._ensure_connected()
+        # Auswahl Audio‑Client
+        target = (os.getenv("SPOT_AUDIO_TARGET") or "auto").strip().lower()
+        client = None
+        if target in ("auto", "spot_cam") and self._audio_client_spotcam is not None:
+            client = self._audio_client_spotcam
+        elif target in ("auto", "robot") and self._audio_client_robot is not None:
+            client = self._audio_client_robot
+        if client is None:
+            raise RuntimeError("Kein Audio-Client verfügbar (Spot CAM/Robot).")
+        with open(path, 'rb') as f:
+            data = f.read()
+        name = os.path.basename(path)
+        # Laden und Abspielen mit einfachem Retry
+        try:
+            try:
+                sound_id = client.load_sound(name=name, sound=data)  # type: ignore[attr-defined]
+            except TypeError:
+                sound_id = client.load_sound(data, name)  # type: ignore[call-arg]
+        except Exception:
+            self._robot.authenticate(self.username, self.password)  # type: ignore
+            self._robot.time_sync.wait_for_sync()  # type: ignore
+            try:
+                sound_id = client.load_sound(name=name, sound=data)  # type: ignore[attr-defined]
+            except TypeError:
+                sound_id = client.load_sound(data, name)  # type: ignore[call-arg]
+        try:
+            client.play_sound(sound_id=sound_id, loop=False)  # type: ignore[attr-defined]
+        except TypeError:
+            client.play_sound(name)  # type: ignore[call-arg]
+        return f"Spot: audio '{name}' abgespielt."

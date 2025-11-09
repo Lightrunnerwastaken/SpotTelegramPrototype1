@@ -340,10 +340,25 @@ async def gipfeli_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if s.queue:
         q = ", ".join([f'<a href="tg://user?id={uid}">#{i+1}</a>' for i, uid in enumerate(s.queue)])
         lines.append(f"👥 Queue: {q}")
+    spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+    if spot:
+        try:
+            spot_summary = await asyncio.to_thread(spot.get_status_summary)
+            lines.append(f"🤖 Spot: {spot_summary}")
+        except Exception as e:
+            lines.append(f"🤖 Spot: nicht verfügbar ({e})")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def status_alias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await gipfeli_status(update, context)
+    # Ergänze (separate Nachricht): Spot-Status, falls konfiguriert
+    spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+    if spot:
+        try:
+            txt = await asyncio.to_thread(spot.get_status_summary)
+            await update.message.reply_text(f"🤖 Spot: {txt}")
+        except Exception as e:
+            await update.message.reply_text(f"🤖 Spot: nicht verfügbar ({e})")
 
 async def abort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await reject_if_unauthorized(update):
@@ -612,6 +627,197 @@ async def spot_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(f"🤖 {txt}")
 
 # -----------------------------------------------------------------------------
+# 6b) Spot-aware handlers (photo/play/speech/voice/audio)
+# -----------------------------------------------------------------------------
+
+async def photo_spot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await reject_if_unauthorized(update):
+        return
+    await update.message.reply_text("📷 Nehme Foto auf…")
+    spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+    if spot:
+        try:
+            source = (os.getenv("SPOT_IMAGE_SOURCE") or "frontleft_fisheye_image").strip()
+            img = await asyncio.to_thread(spot.capture_image_jpeg, source)
+            bio = BytesIO(img)
+            bio.name = "spot_snapshot.jpg"
+            await context.bot.send_photo(chat_id=update.effective_chat.id, photo=bio, caption="🤖 Spot Snapshot")
+            return
+        except Exception as e:
+            await context.bot.send_message(update.effective_chat.id, f"Spot-Kamera fehlgeschlagen, nutze lokale Kamera. ({e})")
+    await photo_action(update.effective_chat.id, context)
+
+
+async def play_spot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await reject_if_unauthorized(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Nutze: /play <pfad-zur-Audiodatei>  (WAV/MP3, z. B. spot_speech.wav)")
+        return
+    file_path = " ".join(context.args).strip()
+    if not os.path.isfile(file_path):
+        await update.message.reply_text(f"❌ Datei nicht gefunden:\n{file_path}")
+        return
+    spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+    if spot:
+        try:
+            try:
+                wav_path = await asyncio.to_thread(ensure_wav, Path(file_path))
+            except Exception:
+                wav_path = Path(file_path)
+            msg = await asyncio.to_thread(spot.play_audio_file, str(wav_path))
+            await update.message.reply_text(msg)
+            return
+        except Exception as e:
+            await update.message.reply_text(f"Spot-Audio fehlgeschlagen, spiele lokal: {e}")
+    audio_manager: AudioManager = context.application.bot_data.get("audio_manager")
+    if isinstance(audio_manager, AudioManager):
+        await update.message.reply_text(f"▶️ Spiele lokal: {file_path}")
+        audio_manager.play_in_background(file_path)
+    else:
+        await update.message.reply_text("❌ Audio nicht möglich (Spot/Lokal fehlgeschlagen).")
+
+
+async def speech_spot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await reject_if_unauthorized(update):
+        return
+    text = " ".join(context.args).strip()
+    if not text and update.message and update.message.reply_to_message:
+        text = (update.message.reply_to_message.text or "").strip()
+    if not text:
+        await update.message.reply_text("Nutze: /speech <text>\nOder antworte mit /speech auf eine Text-Nachricht.")
+        return
+    status = await update.message.reply_text("🗣️ Erzeuge Audio …")
+    try:
+        audio_path = await asyncio.to_thread(eleven_tts_to_file, text)
+        with open(audio_path, "rb") as f:
+            await context.bot.send_audio(
+                chat_id=update.effective_chat.id,
+                audio=f,
+                filename=audio_path.name,
+                title="Spot Speech",
+                caption=f"🗣️ ElevenLabs TTS ({audio_path.suffix.lstrip('.')})",
+            )
+        spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+        if spot:
+            try:
+                wav_path = await asyncio.to_thread(ensure_wav, Path(audio_path))
+                msg = await asyncio.to_thread(spot.play_audio_file, str(wav_path))
+                await status.edit_text(f"✅ Audio erzeugt, gesendet und auf Spot abgespielt.\n{msg}")
+                return
+            except Exception as e:
+                await context.bot.send_message(update.effective_chat.id, f"Spot-Audio fehlgeschlagen, spiele lokal: {e}")
+        audio_manager: AudioManager = context.application.bot_data.get("audio_manager")
+        if isinstance(audio_manager, AudioManager):
+            audio_manager.play_in_background(str(audio_path))
+            audio_manager.schedule_cleanup(audio_path)
+            await status.edit_text("✅ Audio erzeugt, gesendet und lokal abgespielt.")
+        else:
+            await status.edit_text("⚠️ Audio erzeugt und gesendet. Abspielen nicht möglich (Spot/Lokal fehlgeschlagen).")
+    except Exception as e:
+        logger.exception(e)
+        await status.edit_text("❌ Konnte Audio nicht erzeugen (siehe Logs).")
+
+
+async def on_voice_spot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await reject_if_unauthorized(update):
+        return
+    v = update.message.voice if update.message else None
+    if not v:
+        return
+    status = await update.message.reply_text("🔊 Verarbeite Sprachnachricht …")
+    try:
+        import shutil as _shutil
+        if _shutil.which("ffmpeg") is None:
+            await status.edit_text("❌ ffmpeg nicht gefunden. Bitte installieren und in PATH aufnehmen (siehe README).")
+            return
+        f = await context.bot.get_file(v.file_id)
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            ogg_path = Path(td) / "voice.ogg"
+            await f.download_to_drive(custom_path=str(ogg_path))
+            wav_path = ensure_wav(ogg_path)
+            stt_lang = (os.getenv("STT_LANGUAGE") or "de").strip()
+            text = await asyncio.to_thread(speech_to_text, wav_path, stt_lang)
+            audio_path = await asyncio.to_thread(eleven_tts_to_file, text or "…")
+            with open(audio_path, "rb") as f_audio:
+                await context.bot.send_audio(
+                    chat_id=update.effective_chat.id,
+                    audio=f_audio,
+                    filename=audio_path.name,
+                    title="Spot Speech",
+                    caption=f"🗣️ STT→TTS: {html_escape(text) if text else '(leer)'}",
+                )
+            spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+            if spot:
+                try:
+                    wav_path = await asyncio.to_thread(ensure_wav, Path(audio_path))
+                    msg = await asyncio.to_thread(spot.play_audio_file, str(wav_path))
+                    await status.edit_text(f"✅ STT→TTS erfolgreich. {msg}")
+                    return
+                except Exception as e:
+                    await context.bot.send_message(update.effective_chat.id, f"Spot-Audio fehlgeschlagen, spiele lokal: {e}")
+            audio_manager: AudioManager = context.application.bot_data.get("audio_manager")
+            if isinstance(audio_manager, AudioManager):
+                audio_manager.play_in_background(str(audio_path))
+                audio_manager.schedule_cleanup(audio_path)
+        await status.edit_text("✅ Sprachnachricht verarbeitet und wiedergegeben.")
+    except Exception as e:
+        logger.exception(e)
+        await status.edit_text("❌ Konnte Sprachnachricht nicht verarbeiten. Prüfe STT/ffmpeg/Modelle.")
+
+
+async def on_audio_spot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await reject_if_unauthorized(update):
+        return
+    a = update.message.audio if update.message else None
+    if not a:
+        return
+    status = await update.message.reply_text("🎶 Verarbeite Audiodatei …")
+    try:
+        f = await context.bot.get_file(a.file_id)
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            in_path = Path(td) / (a.file_name or "audio")
+            await f.download_to_drive(custom_path=str(in_path))
+            try:
+                wav_path = ensure_wav(in_path)
+            except Exception:
+                if in_path.suffix.lower() == ".wav":
+                    wav_path = in_path
+                else:
+                    await status.edit_text("❌ Konnte Audiodatei nicht in WAV konvertieren. Prüfe ffmpeg-Installation.")
+                    return
+            stt_lang = (os.getenv("STT_LANGUAGE") or "de").strip()
+            text = await asyncio.to_thread(speech_to_text, wav_path, stt_lang)
+            audio_path = await asyncio.to_thread(eleven_tts_to_file, text or "…")
+            with open(audio_path, "rb") as f_audio:
+                await context.bot.send_audio(
+                    chat_id=update.effective_chat.id,
+                    audio=f_audio,
+                    filename=audio_path.name,
+                    title="Spot Speech",
+                    caption=f"🗣️ STT→TTS: {html_escape(text) if text else '(leer)'}",
+                )
+            spot = context.application.bot_data.get("spot") if hasattr(context, "application") else None
+            if spot:
+                try:
+                    wav_path = await asyncio.to_thread(ensure_wav, Path(audio_path))
+                    msg = await asyncio.to_thread(spot.play_audio_file, str(wav_path))
+                    await status.edit_text(f"✅ Audiodatei verarbeitet. {msg}")
+                    return
+                except Exception as e:
+                    await context.bot.send_message(update.effective_chat.id, f"Spot-Audio fehlgeschlagen, spiele lokal: {e}")
+            audio_manager: AudioManager = context.application.bot_data.get("audio_manager")
+            if isinstance(audio_manager, AudioManager):
+                audio_manager.play_in_background(str(audio_path))
+                audio_manager.schedule_cleanup(audio_path)
+        await status.edit_text("✅ Audiodatei verarbeitet und wiedergegeben.")
+    except Exception as e:
+        logger.exception(e)
+        await status.edit_text("❌ Konnte Audiodatei nicht verarbeiten. Prüfe STT/ffmpeg/Modelle.")
+
+# -----------------------------------------------------------------------------
 # 7) App bootstrap
 # -----------------------------------------------------------------------------
 
@@ -638,18 +844,18 @@ def main() -> None:
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("say", say))
-    app.add_handler(CommandHandler("photo", photo))
-    app.add_handler(CommandHandler("play", play))
+    app.add_handler(CommandHandler("photo", photo_spot))
+    app.add_handler(CommandHandler("play", play_spot))
     app.add_handler(CommandHandler("gipfeli", gipfeli))
     app.add_handler(CommandHandler("gipfeli_status", gipfeli_status))
     app.add_handler(CommandHandler("status", status_alias))
     app.add_handler(CommandHandler("spot_status", spot_status))
     app.add_handler(CommandHandler("abort", abort))
-    app.add_handler(CommandHandler("speech", speech))
+    app.add_handler(CommandHandler("speech", speech_spot))
     app.add_handler(CallbackQueryHandler(on_button))
     # Voice messages: STT -> TTS pipeline
-    app.add_handler(MessageHandler(filters.VOICE, on_voice))
-    app.add_handler(MessageHandler(filters.AUDIO, on_audio))
+    app.add_handler(MessageHandler(filters.VOICE, on_voice_spot))
+    app.add_handler(MessageHandler(filters.AUDIO, on_audio_spot))
 
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 

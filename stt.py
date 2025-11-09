@@ -2,8 +2,28 @@ import logging
 import os
 from pathlib import Path
 import wave
+import threading
 
 logger = logging.getLogger(__name__)
+
+# Cache für Vosk-Modell, um wiederholte teure Ladevorgänge zu vermeiden
+_VOSK_MODEL = None
+_VOSK_MODEL_PATH: str | None = None
+_VOSK_LOCK = threading.Lock()
+
+
+def _get_vosk_model(model_path: str):
+    global _VOSK_MODEL, _VOSK_MODEL_PATH
+    try:
+        import vosk  # type: ignore
+    except Exception as e:
+        raise RuntimeError("Vosk ist nicht installiert. Bitte 'pip install vosk' ausführen.") from e
+
+    with _VOSK_LOCK:
+        if _VOSK_MODEL is None or _VOSK_MODEL_PATH != model_path:
+            _VOSK_MODEL = vosk.Model(model_path)
+            _VOSK_MODEL_PATH = model_path
+    return _VOSK_MODEL
 
 
 def _stt_vosk(wav_path: Path, language: str | None = None) -> str:
@@ -23,7 +43,7 @@ def _stt_vosk(wav_path: Path, language: str | None = None) -> str:
         if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() not in (8000, 16000, 32000, 44100, 48000):
             logger.warning("WAV-Format ist nicht optimal für Vosk. Empfohlen: 16k mono.")
 
-        model = vosk.Model(model_path)
+        model = _get_vosk_model(model_path)
         rec = vosk.KaldiRecognizer(model, wf.getframerate())
         if language:
             try:
@@ -66,4 +86,3 @@ def speech_to_text(wav_path: Path, language: str | None = None) -> str:
     if backend == "vosk":
         return _stt_vosk(wav_path, language=language)
     raise RuntimeError("Kein STT-Backend verfügbar.")
-

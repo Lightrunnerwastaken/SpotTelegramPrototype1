@@ -14,6 +14,7 @@ __pycache__/
 # Environment & Keys
 .env
 .env.*
+!.env.example
 
 # Media & Audio
 media/
